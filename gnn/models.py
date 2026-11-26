@@ -19,7 +19,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GINEConv, SAGEConv, TAGConv
 
-from views import N_EDGE_TYPES, N_FEATURES, N_TYPES
+from simulator.views import N_EDGE_TYPES, N_FEATURES, N_TYPES
 
 MODEL_NAMES = ["mlp", "sage", "tagcn", "sage_typed", "tagcn_typed", "gine"]
 

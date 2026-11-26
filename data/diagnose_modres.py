@@ -3,12 +3,12 @@ diagnose_modres.py - Team Alpha, Task 1 (follow-up to the first validation run)
 
 Two jobs:
 
-  python diagnose_modres.py doors
+  python -m data.diagnose_modres doors
       Looks at every door polygon that did not match a doorway edge and counts WHY
       (touches 0 / 1 / 2 / 3+ rooms; for 2 rooms: what edge type joins them).
       Writes door_diagnosis_summary.txt and door_diagnosis.csv in --out.
 
-  python diagnose_modres.py plans 1060 7083 1006
+  python -m data.diagnose_modres plans 1060 7083 1006
       Prints, for each plan, the JSON rooms next to the CSV nodes and the edge
       differences, so we can see exactly what disagrees.
 
@@ -22,8 +22,8 @@ from pathlib import Path
 
 import pandas as pd
 
-import modres_loader as ml
-from validate_modres import load_csvs, CSV_TOL_XY, CSV_TOL_VAL
+from data import modres_loader as ml
+from data.validate_modres import load_csvs, CSV_TOL_XY, CSV_TOL_VAL
 
 
 def door_diagnosis(root: Path, out: Path, first, tol: float):

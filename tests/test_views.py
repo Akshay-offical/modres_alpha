@@ -1,9 +1,9 @@
-"""python test_views.py  - checks on the placeholder views (run before trusting any result)."""
+"""python -m tests.test_views  - checks on the placeholder views (run before trusting any result)."""
 import copy
 
 import numpy as np
 
-from views import (DOORWAY, PASSAGE, SEEN, STUB, VISITED, WALL, make_views, synthetic_plans, view_to_data)
+from simulator.views import (DOORWAY, PASSAGE, SEEN, STUB, VISITED, WALL, make_views, synthetic_plans, view_to_data)
 
 plans = synthetic_plans(300, seed=1)
 n_views = 0
@@ -43,7 +43,7 @@ for p in plans:
             if v.state.get(r) not in (VISITED, SEEN):
                 hidden_p.types[r] = (p.types[r] + 1) % 4
                 hidden_p.areas[r] = p.areas[r] * 3 + 1
-        from views import _features
+        from simulator.views import _features
         X2 = _features(hidden_p, v)
         assert np.array_equal(v.features, X2), "features depend on a hidden room"
         # 8. stub rows: type unknown flag set, type one-hot empty, area zero

@@ -1,12 +1,13 @@
 """
 train.py - build views, train the models, evaluate every model on the SAME frozen test views.
 
-Synthetic smoke test (no dataset needed; the numbers mean nothing scientifically):
-    python train.py --source synthetic --plans 800 --models all --epochs 40
+Run from the repository root.
 
-Real data (needs the dataset + shapely; plan ids from validation_out/benchmark_plan_ids.txt).
-modres_loader.py is found automatically in the folder above GNN/.
-    python GNN\\train.py --source modres --root "D:\\ModRes\\dataset" --ids validation_out\\benchmark_plan_ids.txt --models all
+Synthetic smoke test (no dataset needed; the numbers mean nothing scientifically):
+    python -m gnn.train --source synthetic --plans 800 --models all --epochs 40
+
+Real data (needs the dataset + shapely; plan ids from validation_out/benchmark_plan_ids.txt):
+    python -m gnn.train --source modres --root "D:\\ModRes\\dataset" --ids validation_out\\benchmark_plan_ids.txt --models all
 
 What happens
   1. plans are split BY PLAN into train / val / test (70/15/15, fixed seed)
@@ -20,24 +21,18 @@ What happens
 import argparse
 import copy
 import random
-import sys
 import time
 from pathlib import Path
-
-# modres_loader.py lives in the repo root, one folder above GNN/: make it importable from anywhere.
-REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from torch_geometric.loader import DataLoader
 
-import metrics as M
-from models import MODEL_NAMES, Net
-from prior import ConditionalPrior, MarginalPrior
-from views import make_views, plan_from_loader, synthetic_plans, view_to_data
+from baselines.prior import ConditionalPrior, MarginalPrior
+from evaluation import metrics as M
+from gnn.models import MODEL_NAMES, Net
+from simulator.views import make_views, plan_from_loader, synthetic_plans, view_to_data
 
 FRACTIONS = (0.25, 0.5, 0.75)
 FRACTION_COL = 11      # feature column holding the observed fraction (see the feature list in views.py)
@@ -46,7 +41,7 @@ FRACTION_COL = 11      # feature column holding the observed fraction (see the f
 def load_plans(a):
     if a.source == "synthetic":
         return synthetic_plans(a.plans, seed=a.seed)
-    import modres_loader as ml
+    from data import modres_loader as ml
     if not a.ids:
         raise SystemExit("--ids is required with --source modres (e.g. validation_out\\benchmark_plan_ids.txt)")
     root = a.root or ml.DEFAULT_ROOT

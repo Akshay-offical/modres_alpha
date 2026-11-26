@@ -9,7 +9,7 @@ prior.py - the baselines every learned model must beat. Both read exactly the sa
 """
 import numpy as np
 
-from views import N_TYPES
+from simulator.views import N_TYPES
 
 
 def _stub_contexts(d):
