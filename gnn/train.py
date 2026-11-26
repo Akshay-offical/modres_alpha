@@ -22,7 +22,12 @@ import argparse
 import copy
 import random
 import time
+import warnings
 from pathlib import Path
+
+# Importing torch_geometric triggers this deprecation warning from PyTorch itself. It comes from
+# PyG's own code, not ours, and does not affect results. Hide only this one message.
+warnings.filterwarnings("ignore", message=r"`torch\.jit\.script` is deprecated", category=FutureWarning)
 
 import numpy as np
 import torch
