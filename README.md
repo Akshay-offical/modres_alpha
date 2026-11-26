@@ -59,13 +59,13 @@ Quick run without the dataset (synthetic plans, the numbers mean nothing):
 
     python -m gnn.train --source synthetic --plans 300 --epochs 15
 
-Training on ModRes (add `--limit 300` for a quick test):
+Training on ModRes (add `--limit 300` for a quick test on a random sample of 300 plans):
 
     python -m gnn.train --source modres --root "D:\ModRes\dataset" --ids validation_out\benchmark_plan_ids.txt --no-fraction-feature
 
-Results go to `results_gnn/results.csv`, one row per model, explored fraction and
-calibration setting. For repeated runs change `--seed`; `--split-seed` keeps the
-train/val/test split the same.
+Results go to `results_gnn/results.csv`, one row per model, explored fraction,
+calibration setting and flat size (number of bedrooms). For repeated runs change
+`--seed`; `--split-seed` keeps the train/val/test split the same.
 
 ## Notes on the data
 
@@ -77,6 +77,8 @@ train/val/test split the same.
   in the geometry file. It is always the living room.
 - Closed doors come from the doorway edges in the graph, not from the door polygons.
   Many door polygons lead to spaces that aren't rooms in the graph.
+- Plan ids are sorted by flat size: ids below 1000 are mostly 1-bedroom flats, the
+  last ones have 3 or more bedrooms. Never use the first N plans as a sample.
 - Edge length is centre to centre for now, using the stored room position (the average
   of the polygon's corners).
 

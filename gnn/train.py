@@ -16,7 +16,8 @@ What happens
   3. the frequency priors are counted on the training views
   4. each neural model: cross-entropy on stub nodes only, Adam, early stopping on validation NLL,
      then temperature scaling fitted on the validation set
-  5. a table per model and per observed fraction: accuracy, NLL, Brier, ECE, before/after temperature
+  5. a table per model and per observed fraction: accuracy, NLL, Brier, ECE, before/after temperature;
+     results.csv also splits every row by flat size (bedrooms 1 / 2 / 3 / 4+)
 """
 import argparse
 import copy
@@ -51,8 +52,10 @@ def load_plans(a):
         raise SystemExit("--ids is required with --source modres (e.g. validation_out\\benchmark_plan_ids.txt)")
     root = a.root or ml.DEFAULT_ROOT
     ids = [int(s) for s in Path(a.ids).read_text().split()]
-    if a.limit:
-        ids = ids[: a.limit]
+    if a.limit and a.limit < len(ids):
+        # ModRes is sorted by flat size (ids 0-999 are mostly 1-bedroom flats), so the first N plans
+        # are not representative. Take a random sample instead; it depends only on --split-seed.
+        ids = sorted(random.Random(a.split_seed).sample(ids, a.limit))
     plans = []
     t0 = time.time()
     for k, i in enumerate(ids, 1):
@@ -76,8 +79,11 @@ def build(plans, walks, base_seed):
     data = []
     for w in range(walks):
         for p in plans:
+            n_bed = sum(1 for t in p.types if t == 1)
             for v in make_views(p, FRACTIONS, seed=base_seed + w):
-                data.append(view_to_data(v))
+                d = view_to_data(v)
+                d.n_bed = n_bed          # flat size, only used to split the results table; never a model input
+                data.append(d)
     return data
 
 
@@ -122,13 +128,19 @@ def train_one(name, train, val, a, device):
     return model, ep, best
 
 
-def rows_for(name, p, y, fr, tag):
+BEDROOM_GROUPS = (("all", 0, 99), ("1", 1, 1), ("2", 2, 2), ("3", 3, 3), ("4+", 4, 99))
+
+
+def rows_for(name, p, y, fr, bed, tag):
+    """One row per (observed fraction, flat size); 'all' rows pool everything."""
     rows = []
     for f in list(FRACTIONS) + ["all"]:
-        m = np.ones(len(y), bool) if f == "all" else np.isclose(fr, f)
-        if m.sum() == 0:
-            continue
-        rows.append(dict(model=name, calib=tag, fraction=f, **M.summarise(p[m], y[m])))
+        mf = np.ones(len(y), bool) if f == "all" else np.isclose(fr, f)
+        for group, lo, hi in BEDROOM_GROUPS:
+            m = mf & (bed >= lo) & (bed <= hi)
+            if m.sum() == 0:
+                continue
+            rows.append(dict(model=name, calib=tag, fraction=f, bedrooms=group, **M.summarise(p[m], y[m])))
     return rows
 
 
@@ -138,7 +150,7 @@ def main():
     ap.add_argument("--plans", type=int, default=800, help="synthetic only")
     ap.add_argument("--root", default=None)
     ap.add_argument("--ids", default=None, help="file with plan ids (benchmark_plan_ids.txt)")
-    ap.add_argument("--limit", type=int, default=0, help="use only the first N ids (quick tests)")
+    ap.add_argument("--limit", type=int, default=0, help="use a random sample of N plans for quick tests (the sample depends on --split-seed)")
     ap.add_argument("--models", default="all", help="comma list from " + ",".join(MODEL_NAMES) + " or 'all'")
     ap.add_argument("--epochs", type=int, default=60)
     ap.add_argument("--patience", type=int, default=10)
@@ -177,12 +189,14 @@ def main():
     # test labels / fractions in the same order for every model
     y_test = np.concatenate([d.y[d.stub_mask].numpy() for d in test])
     fr_test = np.concatenate([np.full(int(d.stub_mask.sum()), d.fraction) for d in test])
-    print(f"test stub rooms = {len(y_test)}")
+    bed_test = np.concatenate([np.full(int(d.stub_mask.sum()), d.n_bed) for d in test])
+    print(f"test stub rooms = {len(y_test)}   by bedrooms: "
+          + "  ".join(f"{g}: {int(((bed_test >= lo) & (bed_test <= hi)).sum())}" for g, lo, hi in BEDROOM_GROUPS[1:]))
 
     for pname, prior in (("prior_marginal", MarginalPrior().fit(train)),
                          ("prior_conditional", ConditionalPrior().fit(train))):
         p = np.concatenate([prior.predict(d) for d in test])
-        all_rows += rows_for(pname, p, y_test, fr_test, "none")
+        all_rows += rows_for(pname, p, y_test, fr_test, bed_test, "none")
 
     names = MODEL_NAMES if a.models == "all" else a.models.split(",")
     vl = DataLoader(val, batch_size=256)
@@ -194,8 +208,8 @@ def main():
         zt, yt, frt = logits_on_stubs(model, tel, device)
         assert np.array_equal(yt, y_test) and np.allclose(frt, fr_test), "test order differs"
         T = M.fit_temperature(zv, yv)
-        all_rows += rows_for(name, M.softmax(zt), yt, frt, "raw")
-        all_rows += rows_for(name, M.softmax(zt, T), yt, frt, f"T={T:.2f}")
+        all_rows += rows_for(name, M.softmax(zt), yt, frt, bed_test, "raw")
+        all_rows += rows_for(name, M.softmax(zt, T), yt, frt, bed_test, f"T={T:.2f}")
         print(f"  {name:12s} epochs {ep:3d}  best val NLL {best:.3f}  T {T:.2f}  ({time.time() - t0:.0f}s)")
 
     import pandas as pd
@@ -205,8 +219,14 @@ def main():
     df.insert(2, "fraction_feature", not a.no_fraction_feature)
     df.to_csv(out / "results.csv", index=False)
     pd.set_option("display.width", 200)
-    show = df[df.fraction.astype(str).isin(["all"] + [str(f) for f in FRACTIONS])]
+    show = df[df.bedrooms == "all"].drop(columns="bedrooms")
     print("\n", show.round(3).to_string(index=False))
+
+    # accuracy by flat size (temperature scaling does not change accuracy, so raw / none rows are enough)
+    acc = df[df.calib.isin(["none", "raw"])].pivot_table(index=["model", "fraction"], columns="bedrooms",
+                                                        values="acc", sort=False)
+    acc = acc[[g for g, _, _ in BEDROOM_GROUPS if g in acc.columns]]
+    print("\naccuracy by number of bedrooms in the flat:\n", acc.round(3).to_string())
 
 
 if __name__ == "__main__":
