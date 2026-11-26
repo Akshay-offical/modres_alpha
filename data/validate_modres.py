@@ -4,10 +4,10 @@ validate_modres.py - Team Alpha, Task 1
 Checks every ModRes plan: adjacency JSON vs adjacency CSV vs geometry JSON,
 room-type constraints, edges, entrance and doors.
 
-Usage (Windows, from the folder holding both .py files):
-    python validate_modres.py
-    python validate_modres.py --first 50          # quick test on plans 0..49
-    python validate_modres.py --root "D:\\ModRes-main\\ModRes-main\\dataset" --out validation_out
+Usage (from the repository root):
+    python -m data.validate_modres
+    python -m data.validate_modres --first 50          # quick test on plans 0..49
+    python -m data.validate_modres --root "D:\\ModRes-main\\ModRes-main\\dataset" --out validation_out
 
 Needs: shapely, pandas  (pip install shapely pandas)
 Writes in --out: validation_report.csv, validation_summary.txt,
@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pandas as pd
 
-import modres_loader as ml
+from data import modres_loader as ml
 
 CSV_TOL_XY = 1e-3        # centroid match between JSON and CSV (observed difference ~1e-6)
 CSV_TOL_VAL = 0.011      # CSV values are rounded to 2 decimals
