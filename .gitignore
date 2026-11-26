@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# outputs of the scripts (regenerate them, don't commit)
+validation_out/
+results_gnn/
+
+# LibreOffice / Word lock files
+.~lock.*#
+~$*

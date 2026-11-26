@@ -1,0 +1,9 @@
+# Python packages for modres_alpha (versions as installed on Prasanna's laptop, Nov 2026)
+# Install PyTorch CPU first:  pip install torch==2.15.0 --index-url https://download.pytorch.org/whl/cpu
+# then:                       pip install -r requirements.txt
+torch==2.15.0
+torch_geometric==2.8.1
+shapely==2.2.0
+pandas==3.1.1
+numpy==2.5.5
+matplotlib==3.11.2
