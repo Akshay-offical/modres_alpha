@@ -1,23 +1,21 @@
 """
-views.py - PLACEHOLDER simulator output, so the GNN can be built before the real simulator exists.
+views.py - the View format shared by the simulator, the priors and the GNN.
 
 A "view" is what the robot has seen after exploring part of a plan:
     visited  rooms entered           (type, area known)
     seen     rooms visible through an open passage from a visited room (type known, area NOT known)
-    stub     rooms behind an unopened doorway (type UNKNOWN)  <- what Task 1 predicts
+    stub     rooms behind a closed doorway of a visited or seen room (type UNKNOWN)  <- what Task 1 predicts
     unseen   everything else         (not in the view at all)
 
 Nothing about unseen rooms, and nothing about the TYPE or AREA of a stub, may enter the features.
 test_views.py checks this.
 
-When the real simulator is ready, it only has to produce the same View objects (or call
-`view_to_data`), and nothing else in the pipeline changes.
+The views themselves are made by the exploration simulator in explore.py; make_views() below calls it.
 
 Edge types: 0 doorway, 1 passage, 2 wall.  Room types: 0 living, 1 bedroom, 2 bathroom, 3 kitchen.
 """
 from __future__ import annotations
 
-import math
 import random
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -50,7 +48,7 @@ class PlanGraph:
     areas: List[float]
     edges: Dict[Tuple[int, int], int]     # (u<v) -> edge type
     entrance: int
-    coords: Optional[List[Tuple[float, float]]] = None   # used only to pick the nearest next room
+    coords: Optional[List[Tuple[float, float]]] = None   # room centres; not used by the simulator
 
     @property
     def n(self) -> int:
@@ -146,87 +144,10 @@ class View:
     features: np.ndarray = field(default=None, repr=False)   # (len(nodes), N_FEATURES)
 
 
-def _target_count(n_rooms: int, fraction: float) -> int:
-    k = int(round(fraction * n_rooms))
-    return max(1, min(k, n_rooms - 1))
-
-
 def make_views(plan: PlanGraph, fractions=(0.25, 0.5, 0.75), seed: int = 0) -> List[View]:
-    """One walk, snapshots at each fraction (so 25% is inside 50% is inside 75%).
-
-    Placeholder walk rule: from everything the robot has reached through doorways / passages, go to the
-    nearest unvisited room (centroid distance, if coordinates exist; random otherwise), random tie-break.
-    Passages are 'seen' from the neighbouring room; doorways are stubs until the robot opens them.
-    The REAL simulator replaces this function.
-    """
-    rng = random.Random((seed * 1_000_003) ^ (plan.plan_id * 7919))
-    visited = [plan.entrance]
-    vset = {plan.entrance}
-    targets = {f: _target_count(plan.n, f) for f in fractions}
-    snaps: Dict[float, List[int]] = {}
-    current = plan.entrance
-
-    def check_snaps():
-        for f in fractions:
-            if f not in snaps and len(visited) >= targets[f]:
-                snaps[f] = list(visited)
-
-    check_snaps()
-    while len(visited) < max(targets.values()):
-        frontier = sorted({v for a in visited for v in plan.connected_neighbours(a) if v not in vset})
-        if not frontier:
-            break
-        if plan.coords is not None:
-            cx, cy = plan.coords[current]
-            dist = {v: math.hypot(plan.coords[v][0] - cx, plan.coords[v][1] - cy) for v in frontier}
-            best = min(dist.values())
-            cand = [v for v in frontier if dist[v] <= best + 1e-9]
-        else:
-            cand = frontier
-        nxt = rng.choice(cand)
-        visited.append(nxt)
-        vset.add(nxt)
-        current = nxt
-        check_snaps()
-
-    views = []
-    for f in fractions:
-        if f in snaps:
-            v = _build_view(plan, snaps[f], f)
-            if v is not None:
-                views.append(v)
-    return views
-
-
-def _build_view(plan: PlanGraph, visited_list: List[int], fraction: float) -> Optional[View]:
-    vset = set(visited_list)
-    state: Dict[int, int] = {r: VISITED for r in visited_list}
-    # seen via passage first (type known), then stubs via doorway
-    for a in visited_list:
-        for b in plan.connected_neighbours(a):
-            if b not in vset and plan.etype(a, b) == PASSAGE:
-                state[b] = SEEN
-    for a in visited_list:
-        for b in plan.connected_neighbours(a):
-            if b not in vset and b not in state and plan.etype(a, b) == DOORWAY:
-                state[b] = STUB
-    truth = {r: plan.types[r] for r, s in state.items() if s == STUB}
-    if not truth:
-        return None                      # nothing to predict in this view
-    nodes = sorted(state)
-    known = {r for r, s in state.items() if s in (VISITED, SEEN)}
-    edges = []
-    for (u, v), t in plan.edges.items():
-        if u in state and v in state:
-            if t == WALL:
-                if u in known and v in known:          # wall adjacency is only revealed between known rooms
-                    edges.append((u, v, t))
-            elif (u in vset) or (v in vset):           # a door / passage the robot has actually seen
-                edges.append((u, v, t))
-    view = View(plan.plan_id, fraction, nodes, state, edges, truth, plan.entrance,
-                len(visited_list), plan.n)
-    view.features = _features(plan, view)
-    return view
+    """One walk through the plan with a snapshot at each fraction - see simulator/explore.py."""
+    from simulator.explore import make_views as explore_views   # imported here: explore.py imports this module
+    return explore_views(plan, fractions, seed)
 
 
 def _hops_from_entrance(view: View) -> Dict[int, int]:

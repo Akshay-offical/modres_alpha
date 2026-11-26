@@ -26,10 +26,11 @@ for p in plans:
                 if b in vis and b not in reach:
                     reach.add(b); q.append(b)
         assert reach == vis, "visited rooms not connected through doors"
-        # 4. every stub really is behind a doorway from a visited room, and has a truth label
+        # 4. every stub really is behind a doorway from a visited or seen room, and has a truth label
+        known = {r for r, s in v.state.items() if s in (VISITED, SEEN)}
         for r, s in v.state.items():
             if s == STUB:
-                assert any(p.etype(a, r) == DOORWAY for a in vis), "stub without a doorway"
+                assert any(p.etype(a, r) == DOORWAY for a in known), "stub without a doorway"
                 assert r in v.truth
         # 5. wall edges only between rooms whose type the robot knows
         for u, w, t in v.edges:
