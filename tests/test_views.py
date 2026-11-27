@@ -1,4 +1,4 @@
-"""python -m tests.test_views  - checks on the placeholder views (run before trusting any result)."""
+"""python -m tests.test_views  - checks on the simulator's views (run before trusting any result)."""
 import copy
 
 import numpy as np
