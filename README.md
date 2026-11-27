@@ -27,7 +27,7 @@ Data: ModRes (Shelley et al., 2026), 8,431 residential floor plans stored as roo
     gnn/          GNN models and the training script
     evaluation/   accuracy, NLL, Brier score, ECE, temperature scaling
     tests/        checks that views don't leak hidden information
-    docs/         notes
+    docs/         notes; simulator.md explains the simulator and its tables
 
 Run everything from the repository root with `python -m ...`.
 
@@ -54,6 +54,15 @@ Check the data. This writes `validation_out/`, including `benchmark_plan_ids.txt
 Check that the views don't leak anything:
 
     python -m tests.test_views
+
+Write the views as tables to look at them (same plans, split and walks as the GNN; writes
+`sim_tables/` and a summary). Add `--limit 300` for a quick look:
+
+    python -m simulator.tables --source modres --root "D:\ModRes\dataset" --ids validation_out\benchmark_plan_ids.txt
+
+Compare the exploration policies and stop rules (writes `sim_compare/`):
+
+    python -m simulator.compare --root "D:\ModRes\dataset" --ids validation_outenchmark_plan_ids.txt
 
 Quick run without the dataset (synthetic plans, the numbers mean nothing):
 
@@ -84,13 +93,17 @@ calibration setting and flat size (number of bedrooms). For repeated runs change
 
 ## How the simulator explores
 
+Short version below; the full description (words, MDP, rules, output files) is in `docs/simulator.md`.
+
 - The robot visits rooms nearest to the front door first, counting steps through doorways
   and passages (never walls). Rooms the same number of steps away are visited in a random
   order fixed by the seed.
 - Rooms visible through an open passage of a visited room count as seen. Rooms behind a
   closed doorway of a visited or seen room are stubs, the rooms Task 1 predicts.
 - "25 % explored" means 25 % of the rooms (visited + seen), not floor area. The robot stops
-  the first time it reaches that, so on average it knows a bit more (about 31 % at 25 %).
+  the moment the share of known rooms is closest to that (a tie goes below). It can still be a bit
+  above (about 30 % on average at 25 %, because the front-door view alone is often a third of a
+  small flat). `stop="at_most"` never goes above, but small flats then get no 25 % view.
 - Each seed is one walk, and the 25 / 50 / 75 % views are snapshots of it, so they are nested.
 - The walk is written as a Markov decision process (`ExplorationEnv` in `simulator/explore.py`):
   the state is what the robot knows, an action is the next room to enter, and a policy picks it.

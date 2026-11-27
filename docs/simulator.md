@@ -40,6 +40,10 @@ Policies:
 The views in our results come from `bfs`. The others are there to check that the models do not depend
 on how the robot explores.
 
+An A* policy (shortest walk from where the robot stands) was tried and dropped: it walked about 22 % less
+than `bfs` up to 75 %, but its walks repeat across seeds far more often (about 67 % duplicate views), and
+walking distance plays no part in what the models see.
+
 ### What the robot learns after each visit (`look_around`)
 
 - A passage from a visited room makes the next room **seen**.
@@ -49,10 +53,18 @@ on how the robot explores.
 
 ### Snapshots
 
-For each fraction p, the walk stops as soon as visited + seen rooms reach `round(p * n_rooms)`
-(rounded half up, kept between 1 and n_rooms - 1), and a snapshot is taken. The same walk is used for
-every p, so the 25 % view is inside the 50 % view, which is inside the 75 % view. Views with no
-behind_door room are dropped, because there is nothing to predict.
+One walk per seed; a snapshot for each fraction p, so the 25 % view is inside the 50 % view, which is
+inside the 75 % view. Three stop rules (`stop=`):
+
+| Rule | Snapshot | Note |
+|---|---|---|
+| `nearest` (default) | the moment the share of known rooms is closest to p, below or above (a tie goes to below) | every walk gets every p, so every flat is in every bucket; at 25 % it is often above 25 %, because the front-door view alone is often a third of the flat |
+| `at_most` | the last moment visited + seen rooms are at most `floor(p * n_rooms)`: never above p | no snapshot for p if the robot already knows more than that in the entrance room (about 65 % of walks at 25 %, mostly small flats) |
+| `at_least` | the first moment visited + seen rooms reach `round(p * n_rooms)` | often goes above p (about 32 % on average at 25 %) |
+
+Always report the actual share known (`observed_fraction` in the tables) next to p.
+
+Views with no behind_door room are dropped, because there is nothing to predict.
 
 ### What goes into a view's edges
 
@@ -72,7 +84,7 @@ reaches the model.
 ```
 python -m simulator.explore                                                   # a synthetic plan
 python -m simulator.explore --plan 210 --root "D:\ModRes\dataset" --seed 1    # a real plan
-python -m simulator.explore --plan 210 --root "D:\ModRes\dataset" --policy door_first
+python -m simulator.explore --plan 210 --root "D:\ModRes\dataset" --policy random --stop at_least
 ```
 
 Prints one line per visit: the room entered, what is seen, what is behind a door, the known count, and
@@ -90,7 +102,8 @@ python -m simulator.tables --source modres --root "D:\ModRes\dataset" --ids vali
 python -m simulator.tables --source synthetic --plans 300        # quick check, numbers mean nothing
 ```
 
-Add `--limit 300` for a random sample, `--policy random` or `--policy door_first` for another policy.
+Add `--limit 300` for a random sample, `--policy random` (or `door_first`) for another policy, and
+`--stop at_most` or `--stop at_least` for another stop rule. `snapshots.parquet` also records `stop`.
 
 Output (default folder `sim_tables/`), one row per ...
 
@@ -108,3 +121,15 @@ Two differences from what the GNN's features contain, both on purpose:
 
 - area is given here for seen rooms too; the GNN features give area for visited rooms only;
 - duplicates are kept and marked, because the GNN trains on them too (it does not remove them).
+
+## Comparing the methods (`simulator/compare.py`)
+
+Runs every policy with every stop rule on the same plans and seeds, and summarises per method, rule and p:
+coverage (share of walks that give a view), share of rooms known (mean, max, share above p), visits,
+rooms behind a door and hidden rooms per view, kitchen share of the answers, and duplicates.
+
+```
+python -m simulator.compare --root "D:\ModRes\dataset" --ids validation_out\benchmark_plan_ids.txt
+```
+
+Writes `sim_compare/walks.parquet` (one row per plan, method, rule, seed and p) and `summary.csv` / `summary.txt`.

@@ -97,7 +97,7 @@ def edges_robot_knows(plan: PlanGraph, known: set, behind_door: set) -> List[Tup
 @dataclass
 class ExplorationState:
     """What the robot knows at one moment."""
-    visited: List[int]                            # in the order they were entered
+    visited: List[int]                            # in the order they were entered; the last is where it stands
     seen: set = field(default_factory=set)
     behind_door: set = field(default_factory=set)
 
@@ -181,6 +181,7 @@ POLICIES: Dict[str, Callable[[ExplorationEnv, random.Random], Policy]] = {
     "random": random_policy,
     "door_first": door_first_policy,
 }
+STOP_RULES = ("nearest", "at_most", "at_least")
 
 
 # --------------------------------------------------------------------------- views
@@ -214,12 +215,46 @@ def walk(plan: PlanGraph, seed: int = 0, policy: str = "bfs") -> Iterator[Explor
         yield state
 
 
-def walk_snapshots(plan: PlanGraph, fractions=FRACTIONS, seed: int = 0,
-                   policy: str = "bfs") -> Dict[float, ExplorationState]:
-    """What the robot knows the first moment each fraction's target is reached, in one walk.
-    Includes snapshots with nothing behind a door."""
-    targets = {p: rooms_to_know(p, plan.n) for p in fractions}
+def rooms_allowed(p: float, n_rooms: int) -> int:
+    """At most how many rooms the robot may know (visited + seen) for fraction p: p * n, rounded down."""
+    return math.floor(p * n_rooms + 1e-9)        # + 1e-9: 0.75 * 4 must give 3, not 2.999...
+
+
+def walk_snapshots(plan: PlanGraph, fractions=FRACTIONS, seed: int = 0, policy: str = "bfs",
+                   stop: str = "nearest") -> Dict[float, ExplorationState]:
+    """What the robot knows at each fraction p, in one walk. Includes snapshots with nothing behind a door.
+
+    nearest  (default) the moment its share of known rooms is closest to p, below or above (a tie goes
+             to below). Every walk gets every p, so every flat is in every bucket.
+    at_most  the last moment it knows at most p of the rooms: never above p. A p is left out if the robot
+             already knows more than that in the entrance room (most small flats at 25 %).
+    at_least the first moment it knows at least round(p * n) rooms; often goes above p.
+    """
     snapshots: Dict[float, ExplorationState] = {}
+    if stop == "nearest":
+        gaps: Dict[float, float] = {}
+        for state in walk(plan, seed, policy):
+            share = len(state.known) / plan.n
+            for p in fractions:
+                gap = abs(share - p)
+                if p not in gaps or gap < gaps[p] - 1e-9:   # strictly closer; known only grows, so a tie keeps the lower
+                    gaps[p], snapshots[p] = gap, state
+            if share > max(fractions):                       # further states only get further away
+                break
+        return snapshots
+    if stop == "at_most":
+        limits = {p: rooms_allowed(p, plan.n) for p in fractions}
+        for state in walk(plan, seed, policy):
+            known = len(state.known)
+            if known > max(limits.values()):          # known only grows: nothing later can fit
+                break
+            for p, limit in limits.items():
+                if known <= limit:
+                    snapshots[p] = state              # keep the latest state still within the limit
+        return snapshots
+    if stop != "at_least":
+        raise ValueError(f"unknown stop rule {stop!r}; use one of {STOP_RULES}")
+    targets = {p: rooms_to_know(p, plan.n) for p in fractions}
     for state in walk(plan, seed, policy):
         for p, target in targets.items():
             if p not in snapshots and len(state.known) >= target:
@@ -229,19 +264,20 @@ def walk_snapshots(plan: PlanGraph, fractions=FRACTIONS, seed: int = 0,
     return snapshots
 
 
-def make_views(plan: PlanGraph, fractions=FRACTIONS, seed: int = 0, policy: str = "bfs") -> List[View]:
+def make_views(plan: PlanGraph, fractions=FRACTIONS, seed: int = 0, policy: str = "bfs",
+               stop: str = "nearest") -> List[View]:
     """One walk through the plan with the given policy, and a View at each fraction.
 
     With "bfs", different seeds give different walks only where rooms tie on steps from the entrance.
     """
-    snapshots = walk_snapshots(plan, fractions, seed, policy)
+    snapshots = walk_snapshots(plan, fractions, seed, policy, stop)
     return [build_view(plan, snapshots[p], p) for p in fractions
             if p in snapshots and snapshots[p].behind_door]   # nothing to predict -> no view
 
 
 # --------------------------------------------------------------------------- demo
 def _demo():
-    """python -m simulator.explore [--plan ID --root DATASET] [--seed N] [--policy bfs|random|door_first]
+    """python -m simulator.explore [--plan ID --root DATASET] [--seed N] [--policy NAME] [--stop RULE]
 
     Walks one plan step by step and prints what the robot knows. Without --plan it uses a synthetic plan.
     """
@@ -253,6 +289,7 @@ def _demo():
     ap.add_argument("--root", default=None, help="ModRes dataset folder (with Graphs and Geometry)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--policy", choices=sorted(POLICIES), default="bfs")
+    ap.add_argument("--stop", choices=STOP_RULES, default="nearest")
     a = ap.parse_args()
 
     if a.plan is None:
@@ -264,25 +301,29 @@ def _demo():
     kinds = {DOORWAY: "door", PASSAGE: "passage", WALL: "wall"}
     room = lambda r: f"{r}:{TYPE_NAMES[plan.types[r]]}"
     steps = ExplorationEnv(plan).steps
-    targets = {p: rooms_to_know(p, plan.n) for p in FRACTIONS}
+    rule = {"nearest": lambda p: f"closest to {p * plan.n:g}",
+            "at_most": lambda p: f"at most {rooms_allowed(p, plan.n)}",
+            "at_least": lambda p: f"at least {rooms_to_know(p, plan.n)}"}[a.stop]
+    rule = {p: rule(p) for p in FRACTIONS}
+    snapshots = walk_snapshots(plan, FRACTIONS, a.seed, a.policy, a.stop)
 
     print(f"plan {plan.plan_id}: {plan.n} rooms, entrance = room {room(plan.entrance)}")
     print("connections: " + ", ".join(f"{room(u)}-{room(v)} {kinds[t]}" for (u, v), t in sorted(plan.edges.items())))
     print("steps from the entrance: " + ", ".join(f"{room(r)}={s}" for r, s in sorted(steps.items(), key=lambda x: x[1])))
-    print("targets (rooms to know): " + ", ".join(f"{int(p * 100)}% -> {t}" for p, t in targets.items()))
+    print(f"snapshots ({a.stop}, rooms known): " + ", ".join(f"{int(p * 100)}% -> {r}" for p, r in rule.items()))
     print(f"policy: {a.policy}, seed: {a.seed}\n")
 
-    stopped = set()
     for state in walk(plan, a.seed, a.policy):
         known = len(state.known)
-        stops = [f"{int(p * 100)}% stop" for p, t in targets.items() if p not in stopped and known >= t]
-        stopped |= {p for p, t in targets.items() if known >= t}
+        here = [f"{int(p * 100)}% snapshot" for p, s in snapshots.items() if s.visited == state.visited]
         print(f"visit {len(state.visited)}: entered {room(state.visited[-1]):12s} "
               f"seen [{', '.join(room(r) for r in sorted(state.seen))}]  "
               f"behind a door [{', '.join(room(r) for r in sorted(state.behind_door))}]  "
-              f"known {known}/{plan.n}" + (f"  <- {', '.join(stops)}" if stops else ""))
-        if len(stopped) == len(targets):
-            break
+              f"known {known}/{plan.n}"
+              + (f"  <- {', '.join(here)}" if here else ""))
+    missing = [f"{int(p * 100)}%" for p in FRACTIONS if p not in snapshots]
+    if missing:
+        print(f"\nno snapshot for {', '.join(missing)}: the robot already knows more than that in the entrance room")
 
 
 if __name__ == "__main__":

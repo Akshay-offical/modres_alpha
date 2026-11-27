@@ -6,6 +6,8 @@ __pycache__/
 # outputs of the scripts (regenerate them, don't commit)
 validation_out/
 results_gnn/
+sim_tables/
+sim_compare/
 
 # LibreOffice / Word lock files
 .~lock.*#

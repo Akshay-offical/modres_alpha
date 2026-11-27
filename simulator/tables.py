@@ -15,7 +15,7 @@ from pathlib import Path
 import pandas as pd
 
 from data.splits import sample_ids, split_by_plan
-from simulator.explore import FRACTIONS, POLICIES, TYPE_NAMES, build_view, walk_snapshots
+from simulator.explore import FRACTIONS, POLICIES, STOP_RULES, TYPE_NAMES, build_view, walk_snapshots
 from simulator.views import DOORWAY, PASSAGE, _hops_from_entrance, plan_from_loader, synthetic_plans
 
 STATE_NAMES = {0: "visited", 1: "seen", 2: "stub"}
@@ -40,12 +40,17 @@ def load_plans(a):
     return plans
 
 
-def plan_rows(plan, split, walks, policy, rows):
+def plan_rows(plan, split, walks, policy, stop, rows):
     """Add the rows of every view of one plan to `rows`."""
     made = set()                                  # (p, visited rooms) already seen in this plan
     for w in range(walks):
         seed = BASE_SEED[split] + w
-        for p, state in walk_snapshots(plan, FRACTIONS, seed, policy).items():
+        snapshots = walk_snapshots(plan, FRACTIONS, seed, policy, stop)
+        for p in FRACTIONS:
+            if p not in snapshots:                # robot knows more than p already in the entrance
+                rows["dropped"].append((plan.plan_id, p, seed))
+                continue
+            state = snapshots[p]
             if not state.behind_door:             # nothing to predict -> no view (as in make_views)
                 rows["dropped"].append((plan.plan_id, p, seed))
                 continue
@@ -80,22 +85,23 @@ def plan_rows(plan, split, walks, policy, rows):
                                           u_type=plan.types[u], v_type=plan.types[v],
                                           true_edge_type=kind, label=int(kind in (DOORWAY, PASSAGE))))
 
-            rows["snapshots"].append(dict(**base, p=p, walk=w, seed=seed, policy=policy, n_rooms=plan.n,
+            rows["snapshots"].append(dict(**base, p=p, walk=w, seed=seed, policy=policy, stop=stop, n_rooms=plan.n,
                                           n_visited=len(state.visited), n_seen=len(state.seen),
                                           n_stub=len(state.behind_door),
                                           n_hidden=plan.n - len(known) - len(state.behind_door),
                                           observed_fraction=round(len(known) / plan.n, 4),
-                                          visit_order=list(state.visited), is_duplicate=int(is_duplicate)))
+                                          visit_order=list(state.visited),
+                                          is_duplicate=int(is_duplicate)))
 
 
 def summary(tables, n_dropped, a):
     sn, nd, lab, t2 = tables["snapshots"], tables["nodes"], tables["labels_stub"], tables["task2"]
     lab_p = lab.merge(sn[["snapshot_id", "p"]], on="snapshot_id")
     return "\n".join([
-        f"source: {a.source}   policy: {a.policy}   walks per plan: train {a.train_walks}, val/test {a.eval_walks}"
+        f"source: {a.source}   policy: {a.policy}   stop: {a.stop}   walks per plan: train {a.train_walks}, val/test {a.eval_walks}"
         f"   split seed: {a.split_seed}",
         f"plans: {sn.plan_id.nunique()}   views: {len(sn)}   of which duplicates of an earlier walk: "
-        f"{int(sn.is_duplicate.sum())}   walks dropped (nothing behind a door): {n_dropped}", "",
+        f"{int(sn.is_duplicate.sum())}   snapshots dropped (none within the limit, or nothing behind a door): {n_dropped}", "",
         "views per split and p (duplicates included, as the GNN gets them):",
         sn.groupby(["split", "p"]).size().unstack().to_string(), "",
         "actual observed fraction (mean) by target p:",
@@ -121,6 +127,7 @@ def main():
     ap.add_argument("--train-walks", type=int, default=5, help="same default as gnn.train")
     ap.add_argument("--eval-walks", type=int, default=3, help="same default as gnn.train")
     ap.add_argument("--policy", choices=sorted(POLICIES), default="bfs")
+    ap.add_argument("--stop", choices=STOP_RULES, default="nearest")
     ap.add_argument("--out", default="sim_tables")
     a = ap.parse_args()
 
@@ -129,7 +136,7 @@ def main():
     for split, part in zip(("train", "val", "test"), split_by_plan(plans, a.split_seed)):
         walks = a.train_walks if split == "train" else a.eval_walks
         for plan in part:
-            plan_rows(plan, split, walks, a.policy, rows)
+            plan_rows(plan, split, walks, a.policy, a.stop, rows)
 
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
