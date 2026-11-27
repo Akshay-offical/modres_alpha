@@ -1,48 +1,8 @@
 """
-explore.py - the exploration simulator. Turns a plan into the partial views the models read.
+explore.py - the exploration simulator: turns a plan into the partial views the models read.
 
-It works on the room graph only and returns the same View objects as before (see views.py), so the
-GNN, the priors and the tests use it unchanged.
-
-Words used below
-  step             : walking from one room to the next through a doorway or a passage. Walls are
-                     never crossed. "Steps from the entrance" = the fewest steps needed to reach a room.
-  visited room     : the robot has been inside.
-  seen room        : not entered, but visible through an open passage of a visited room.
-  behind_door room : behind a closed doorway of a visited or seen room. The robot knows a room is
-                     there but not its type. Task 1 predicts its type. Called STUB in views.py.
-  hidden room      : the robot does not know the room exists. Not in the view at all.
-
-Exploration as a Markov decision process (MDP)
-  state      : what the robot knows - the rooms it has visited (in order), the rooms it has seen,
-               and the rooms it knows are behind a door (ExplorationState).
-  action     : the next room to enter. Allowed: any room not yet visited that a visited room leads
-               to through a doorway or passage (ExplorationEnv.actions).
-  transition : entering the room makes it visited; looking around from the visited rooms updates
-               seen and behind_door (ExplorationEnv.step). It is deterministic.
-  policy     : the rule that picks the action. The simulator does not learn one; it uses a fixed
-               rule from POLICIES. "bfs" is the default and the baseline:
-                 bfs        nearest room first (steps from the entrance), ties in random seeded order
-                 random     any allowed room, chosen at random
-                 door_first rooms behind a door before rooms already seen, then nearest first
-               The views in our results come from "bfs". The others are there to check that the
-               models do not depend on how the robot explores.
-  There is no reward: nothing is optimised. A learned policy (reinforcement learning) would add one.
-
-Snapshots
-  For each fraction p, the walk stops as soon as visited + seen rooms reach round(p * n_rooms), kept
-  between 1 and n_rooms - 1, and a snapshot is taken. The same walk is used for every p, so the
-  25 % view is inside the 50 % view, which is inside the 75 % view.
-  Views with no behind_door room are dropped (nothing to predict).
-
-What goes into a view's edges
-  - every edge between two known rooms (visited or seen), walls included;
-  - the doorway between a known room and a behind_door room.
-  Nothing else: the robot has never been inside a behind_door or hidden room.
-
-Policies may use the true steps from the entrance to choose a room; that only shapes the walk.
-The hops feature is computed in views.py from the view's own edges, so nothing about the unexplored
-part reaches the model.
+The walk is an MDP (ExplorationEnv) with swappable policies; "bfs" (nearest first from the entrance)
+is the default. Words, rules and how to run it: docs/simulator.md.
 """
 from __future__ import annotations
 
@@ -239,11 +199,10 @@ def build_view(plan: PlanGraph, state: ExplorationState, p: float) -> View:
     return view
 
 
-def make_views(plan: PlanGraph, fractions=(0.25, 0.5, 0.75), seed: int = 0, policy: str = "bfs") -> List[View]:
-    """One walk through the plan with the given policy, and a snapshot at each fraction.
-
-    With "bfs", different seeds give different walks only where rooms tie on steps from the entrance.
-    """
+def walk_snapshots(plan: PlanGraph, fractions=(0.25, 0.5, 0.75), seed: int = 0,
+                   policy: str = "bfs") -> Dict[float, ExplorationState]:
+    """One walk through the plan with the given policy: what the robot knows the first moment each
+    fraction's target is reached. Includes snapshots with nothing behind a door."""
     env = ExplorationEnv(plan)
     rng = random.Random(plan.plan_id * 1_000_003 + seed)
     choose = POLICIES[policy](env, rng)
@@ -258,6 +217,67 @@ def make_views(plan: PlanGraph, fractions=(0.25, 0.5, 0.75), seed: int = 0, poli
         if len(snapshots) == len(targets) or not env.actions(state):
             break
         state = env.step(state, choose(state))
+    return snapshots
 
+
+def make_views(plan: PlanGraph, fractions=(0.25, 0.5, 0.75), seed: int = 0, policy: str = "bfs") -> List[View]:
+    """One walk through the plan with the given policy, and a View at each fraction.
+
+    With "bfs", different seeds give different walks only where rooms tie on steps from the entrance.
+    """
+    snapshots = walk_snapshots(plan, fractions, seed, policy)
     return [build_view(plan, snapshots[p], p) for p in fractions
             if p in snapshots and snapshots[p].behind_door]   # nothing to predict -> no view
+
+
+#demo#
+def _demo():
+    """python -m simulator.explore [--plan ID --root DATASET] [--seed N] [--policy bfs|random|door_first]
+
+    Walks one plan step by step and prints what the robot knows. Without --plan it uses a synthetic plan.
+    """
+    import argparse
+    from simulator.views import plan_from_loader, synthetic_plans
+
+    ap = argparse.ArgumentParser(description="Show one exploration walk step by step.")
+    ap.add_argument("--plan", type=int, default=None, help="ModRes plan id (needs --root)")
+    ap.add_argument("--root", default=None, help="ModRes dataset folder (with Graphs and Geometry)")
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--policy", choices=sorted(POLICIES), default="bfs")
+    a = ap.parse_args()
+
+    if a.plan is None:
+        plan = synthetic_plans(1, seed=a.seed)[0]
+    else:
+        from data import modres_loader as ml
+        plan = plan_from_loader(ml.load_plan(a.plan, a.root or ml.DEFAULT_ROOT))
+
+    names = {0: "living", 1: "bedroom", 2: "bathroom", 3: "kitchen"}
+    kinds = {DOORWAY: "door", PASSAGE: "passage", 2: "wall"}
+    room = lambda r: f"{r}:{names[plan.types[r]]}"
+    env = ExplorationEnv(plan)
+
+    print(f"plan {plan.plan_id}: {plan.n} rooms, entrance = room {room(plan.entrance)}")
+    print("connections: " + ", ".join(f"{room(u)}-{room(v)} {kinds[t]}" for (u, v), t in sorted(plan.edges.items())))
+    print("steps from the entrance: " + ", ".join(f"{room(r)}={s}" for r, s in sorted(env.steps.items(), key=lambda x: x[1])))
+    targets = {p: rooms_to_know(p, plan.n) for p in (0.25, 0.5, 0.75)}
+    print("targets (rooms to know): " + ", ".join(f"{int(p * 100)}% -> {t}" for p, t in targets.items()))
+    print(f"policy: {a.policy}, seed: {a.seed}\n")
+
+    choose = POLICIES[a.policy](env, random.Random(plan.plan_id * 1_000_003 + a.seed))
+    state, stopped = env.reset(), set()
+    while True:
+        known = len(state.known)
+        stops = [f"{int(p * 100)}% stop" for p, t in targets.items() if p not in stopped and known >= t]
+        stopped |= {p for p, t in targets.items() if known >= t}
+        print(f"visit {len(state.visited)}: entered {room(state.visited[-1]):12s} "
+              f"seen [{', '.join(room(r) for r in sorted(state.seen))}]  "
+              f"behind a door [{', '.join(room(r) for r in sorted(state.behind_door))}]  "
+              f"known {known}/{plan.n}" + (f"  <- {', '.join(stops)}" if stops else ""))
+        if len(stopped) == len(targets) or not env.actions(state):
+            break
+        state = env.step(state, choose(state))
+
+
+if __name__ == "__main__":
+    _demo()
