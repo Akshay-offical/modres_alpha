@@ -15,12 +15,11 @@ from pathlib import Path
 import pandas as pd
 
 from data.splits import sample_ids, split_by_plan
-from simulator.explore import POLICIES, build_view, walk_snapshots
+from simulator.explore import FRACTIONS, POLICIES, TYPE_NAMES, build_view, walk_snapshots
 from simulator.views import DOORWAY, PASSAGE, _hops_from_entrance, plan_from_loader, synthetic_plans
 
-FRACTIONS = (0.25, 0.5, 0.75)
-TYPE_NAMES = {0: "living", 1: "bedroom", 2: "bathroom", 3: "kitchen"}
 STATE_NAMES = {0: "visited", 1: "seen", 2: "stub"}
+TABLES = ("snapshots", "nodes", "edges", "labels_stub", "labels_remaining", "task2")
 # walk seeds per split, the same as build(...) in gnn/train.py
 BASE_SEED = {"train": 10_000, "val": 20_000, "test": 30_000}
 
@@ -126,7 +125,7 @@ def main():
     a = ap.parse_args()
 
     plans = load_plans(a)
-    rows = {name: [] for name in ("snapshots", "nodes", "edges", "labels_stub", "labels_remaining", "task2", "dropped")}
+    rows = {name: [] for name in TABLES + ("dropped",)}
     for split, part in zip(("train", "val", "test"), split_by_plan(plans, a.split_seed)):
         walks = a.train_walks if split == "train" else a.eval_walks
         for plan in part:
@@ -134,11 +133,10 @@ def main():
 
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    files = {"snapshots": "snapshots", "nodes": "nodes", "edges": "edges", "labels_stub": "labels_stub",
-             "labels_remaining": "labels_remaining", "task2": "task2_candidates"}
-    tables = {name: pd.DataFrame(rows[name]) for name in files}
-    for name, fname in files.items():
-        tables[name].to_parquet(out / f"{fname}.parquet", index=False)
+    tables = {name: pd.DataFrame(rows[name]) for name in TABLES}
+    for name, table in tables.items():
+        fname = "task2_candidates" if name == "task2" else name
+        table.to_parquet(out / f"{fname}.parquet", index=False)
     text = summary(tables, len(rows["dropped"]), a)
     (out / "sim_summary.txt").write_text(text + "\n", encoding="utf-8")
     print(text)

@@ -10,9 +10,12 @@ import math
 import random
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, Iterator, List, Tuple
 
-from simulator.views import DOORWAY, PASSAGE, SEEN, STUB, VISITED, PlanGraph, View, _features
+from simulator.views import DOORWAY, PASSAGE, SEEN, STUB, VISITED, WALL, PlanGraph, View, _features
+
+FRACTIONS = (0.25, 0.5, 0.75)                     # snapshot targets: share of rooms known
+TYPE_NAMES = {0: "living", 1: "bedroom", 2: "bathroom", 3: "kitchen"}
 
 
 # --------------------------------------------------------------------------- plan helpers
@@ -199,28 +202,34 @@ def build_view(plan: PlanGraph, state: ExplorationState, p: float) -> View:
     return view
 
 
-def walk_snapshots(plan: PlanGraph, fractions=(0.25, 0.5, 0.75), seed: int = 0,
-                   policy: str = "bfs") -> Dict[float, ExplorationState]:
-    """One walk through the plan with the given policy: what the robot knows the first moment each
-    fraction's target is reached. Includes snapshots with nothing behind a door."""
+def walk(plan: PlanGraph, seed: int = 0, policy: str = "bfs") -> Iterator[ExplorationState]:
+    """One walk through the plan: the robot's state in the entrance, then after each visit, until every
+    room has been visited. The caller may stop early."""
     env = ExplorationEnv(plan)
-    rng = random.Random(plan.plan_id * 1_000_003 + seed)
-    choose = POLICIES[policy](env, rng)
-    targets = {p: rooms_to_know(p, plan.n) for p in fractions}
-
-    snapshots: Dict[float, ExplorationState] = {}
+    choose = POLICIES[policy](env, random.Random(plan.plan_id * 1_000_003 + seed))
     state = env.reset()
-    while True:
-        for p, target in targets.items():         # first moment each target is reached
+    yield state
+    while env.actions(state):
+        state = env.step(state, choose(state))
+        yield state
+
+
+def walk_snapshots(plan: PlanGraph, fractions=FRACTIONS, seed: int = 0,
+                   policy: str = "bfs") -> Dict[float, ExplorationState]:
+    """What the robot knows the first moment each fraction's target is reached, in one walk.
+    Includes snapshots with nothing behind a door."""
+    targets = {p: rooms_to_know(p, plan.n) for p in fractions}
+    snapshots: Dict[float, ExplorationState] = {}
+    for state in walk(plan, seed, policy):
+        for p, target in targets.items():
             if p not in snapshots and len(state.known) >= target:
                 snapshots[p] = state
-        if len(snapshots) == len(targets) or not env.actions(state):
+        if len(snapshots) == len(targets):
             break
-        state = env.step(state, choose(state))
     return snapshots
 
 
-def make_views(plan: PlanGraph, fractions=(0.25, 0.5, 0.75), seed: int = 0, policy: str = "bfs") -> List[View]:
+def make_views(plan: PlanGraph, fractions=FRACTIONS, seed: int = 0, policy: str = "bfs") -> List[View]:
     """One walk through the plan with the given policy, and a View at each fraction.
 
     With "bfs", different seeds give different walks only where rooms tie on steps from the entrance.
@@ -230,7 +239,7 @@ def make_views(plan: PlanGraph, fractions=(0.25, 0.5, 0.75), seed: int = 0, poli
             if p in snapshots and snapshots[p].behind_door]   # nothing to predict -> no view
 
 
-#demo#
+# --------------------------------------------------------------------------- demo
 def _demo():
     """python -m simulator.explore [--plan ID --root DATASET] [--seed N] [--policy bfs|random|door_first]
 
@@ -252,21 +261,19 @@ def _demo():
         from data import modres_loader as ml
         plan = plan_from_loader(ml.load_plan(a.plan, a.root or ml.DEFAULT_ROOT))
 
-    names = {0: "living", 1: "bedroom", 2: "bathroom", 3: "kitchen"}
-    kinds = {DOORWAY: "door", PASSAGE: "passage", 2: "wall"}
-    room = lambda r: f"{r}:{names[plan.types[r]]}"
-    env = ExplorationEnv(plan)
+    kinds = {DOORWAY: "door", PASSAGE: "passage", WALL: "wall"}
+    room = lambda r: f"{r}:{TYPE_NAMES[plan.types[r]]}"
+    steps = ExplorationEnv(plan).steps
+    targets = {p: rooms_to_know(p, plan.n) for p in FRACTIONS}
 
     print(f"plan {plan.plan_id}: {plan.n} rooms, entrance = room {room(plan.entrance)}")
     print("connections: " + ", ".join(f"{room(u)}-{room(v)} {kinds[t]}" for (u, v), t in sorted(plan.edges.items())))
-    print("steps from the entrance: " + ", ".join(f"{room(r)}={s}" for r, s in sorted(env.steps.items(), key=lambda x: x[1])))
-    targets = {p: rooms_to_know(p, plan.n) for p in (0.25, 0.5, 0.75)}
+    print("steps from the entrance: " + ", ".join(f"{room(r)}={s}" for r, s in sorted(steps.items(), key=lambda x: x[1])))
     print("targets (rooms to know): " + ", ".join(f"{int(p * 100)}% -> {t}" for p, t in targets.items()))
     print(f"policy: {a.policy}, seed: {a.seed}\n")
 
-    choose = POLICIES[a.policy](env, random.Random(plan.plan_id * 1_000_003 + a.seed))
-    state, stopped = env.reset(), set()
-    while True:
+    stopped = set()
+    for state in walk(plan, a.seed, a.policy):
         known = len(state.known)
         stops = [f"{int(p * 100)}% stop" for p, t in targets.items() if p not in stopped and known >= t]
         stopped |= {p for p, t in targets.items() if known >= t}
@@ -274,9 +281,8 @@ def _demo():
               f"seen [{', '.join(room(r) for r in sorted(state.seen))}]  "
               f"behind a door [{', '.join(room(r) for r in sorted(state.behind_door))}]  "
               f"known {known}/{plan.n}" + (f"  <- {', '.join(stops)}" if stops else ""))
-        if len(stopped) == len(targets) or not env.actions(state):
+        if len(stopped) == len(targets):
             break
-        state = env.step(state, choose(state))
 
 
 if __name__ == "__main__":
