@@ -1,7 +1,7 @@
-# Exploration simulator, tables and rules baselines
+# Exploration simulator and its tables
 
-How the robot explores a floor plan, what the models get to see, and the simple baselines every model
-has to beat. Code: `simulator/explore.py`, `simulator/tables.py`, `baselines/rules.py`.
+How the robot explores a floor plan and what the models get to see.
+Code: `simulator/explore.py`, `simulator/tables.py`.
 
 ## Words used
 
@@ -80,7 +80,7 @@ where each snapshot is taken.
 
 ## The views as tables (`simulator/tables.py`)
 
-Writes the simulator's views as tables, to look at them, count them and run the rules baselines. It uses
+Writes the simulator's views as tables, to look at them and count them. It uses
 the same simulator, the same plans, the same train / val / test split and the same walk seeds as
 `gnn/train.py`, so each table row describes a view the GNN actually trains or is tested on. Nothing here
 is read by the GNN.
@@ -108,41 +108,3 @@ Two differences from what the GNN's features contain, both on purpose:
 
 - area is given here for seen rooms too; the GNN features give area for visited rooms only;
 - duplicates are kept and marked, because the GNN trains on them too (it does not remove them).
-
-## Rules baselines (`baselines/rules.py`)
-
-Simple rules, no machine learning. Run `simulator/tables.py` first; the scores can then be compared with
-the GNN's, because they use the same plans, split and walks. Every table is counted on the **train**
-split only and scored on **val** (or **test** with `--eval test`, only for the final evaluation). Each
-variant adds one rule, so the result table doubles as an ablation. The tables keep duplicate views, so
-the rules see the same data as the GNN.
-
-```
-python -m baselines.rules                  # score on val
-python -m baselines.rules --eval test      # final evaluation only
-```
-
-Output (default `results_rules/`): `results_<split>.csv`, `summary_<split>.txt`, `task1_markov_table.csv`.
-
-### Task 1: what type is the room behind the door?
-
-| Method | Rule |
-|---|---|
-| T1-majority | Always the most common training label. |
-| T1-markov | P(type \| type of a known room whose doorway leads to it), a Markov table. A room with doorways from several known rooms multiplies their rows. |
-| T1-full | T1-markov, plus: a plan has exactly one kitchen, so if a kitchen is already known, "kitchen" is ruled out. |
-
-Metric: macro-F1 over bedroom / bathroom / kitchen (main), accuracy, per-class F1. "living" is left out
-of the macro average: it is the entrance, so it is almost never behind a door and its F1 is 0 for every
-method, which would only add noise. The report must say so.
-
-### Task 2: are two rooms connected or only separated by a wall?
-
-All rooms are given in Task 2; only the connections touching unknown rooms are hidden.
-
-| Method | Rule |
-|---|---|
-| T2-pair | P(connected \| unordered pair of room types). |
-| T2-pair+reach | T2-pair, plus: every room is reachable, so an unknown room with exactly one candidate pair must be connected through it (p = 1). |
-
-Metric: AUROC (main), F1 at threshold 0.5, accuracy.

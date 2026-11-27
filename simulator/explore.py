@@ -80,7 +80,7 @@ def look_around(plan: PlanGraph, visited: set) -> Tuple[set, set]:
 
 
 def edges_robot_knows(plan: PlanGraph, known: set, behind_door: set) -> List[Tuple[int, int, int]]:
-    """Edges in the view as (u, v, kind) with u < v. See the module docstring for the rules."""
+    """Edges in the view as (u, v, kind) with u < v. Rules: docs/simulator.md."""
     view = []
     for (u, v), kind in sorted(plan.edges.items()):
         if u in known and v in known:
