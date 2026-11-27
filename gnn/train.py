@@ -21,7 +21,6 @@ What happens
 """
 import argparse
 import copy
-import random
 import time
 import warnings
 from pathlib import Path
@@ -36,6 +35,7 @@ import torch.nn.functional as F
 from torch_geometric.loader import DataLoader
 
 from baselines.prior import ConditionalPrior, MarginalPrior
+from data.splits import sample_ids, split_by_plan
 from evaluation import metrics as M
 from gnn.models import MODEL_NAMES, Net
 from simulator.views import make_views, plan_from_loader, synthetic_plans, view_to_data
@@ -52,10 +52,7 @@ def load_plans(a):
         raise SystemExit("--ids is required with --source modres (e.g. validation_out\\benchmark_plan_ids.txt)")
     root = a.root or ml.DEFAULT_ROOT
     ids = [int(s) for s in Path(a.ids).read_text().split()]
-    if a.limit and a.limit < len(ids):
-        # ModRes is sorted by flat size (ids 0-999 are mostly 1-bedroom flats), so the first N plans
-        # are not representative. Take a random sample instead; it depends only on --split-seed.
-        ids = sorted(random.Random(a.split_seed).sample(ids, a.limit))
+    ids = sample_ids(ids, a.limit, a.split_seed)   # random sample for --limit (see data/splits.py)
     plans = []
     t0 = time.time()
     for k, i in enumerate(ids, 1):
@@ -63,16 +60,6 @@ def load_plans(a):
         if k % 1000 == 0:
             print(f"  loaded {k}/{len(ids)} plans ({time.time() - t0:.0f}s)")
     return plans
-
-
-def split_by_plan(plans, seed):
-    rng = random.Random(seed)
-    idx = list(range(len(plans)))
-    rng.shuffle(idx)
-    n = len(idx)
-    tr, va = int(0.70 * n), int(0.85 * n)
-    pick = lambda ix: [plans[i] for i in ix]
-    return pick(idx[:tr]), pick(idx[tr:va]), pick(idx[va:])
 
 
 def build(plans, walks, base_seed):

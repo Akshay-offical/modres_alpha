@@ -15,19 +15,19 @@ Data: ModRes (Shelley et al., 2026), 8,431 residential floor plans stored as roo
 
 - Loading and checking the data is done. 8,419 plans are usable, and 8,098 of them
   can be walked completely from the front door. We use those 8,098.
-- The GNN pipeline runs end to end, but on placeholder views. The real robot
-  simulator is still being written.
+- The exploration simulator is done (`simulator/explore.py`) and the GNN pipeline
+  reads its views.
 - The LLM part hasn't started.
 
 ## Layout
 
     data/         read the ModRes plans and check them
-    simulator/    turn a plan into partial views at 25/50/75 % explored (views.py is a placeholder)
+    simulator/    turn a plan into partial views at 25/50/75 % explored (explore.py walks, views.py holds the View format)
     baselines/    frequency priors
     gnn/          GNN models and the training script
     evaluation/   accuracy, NLL, Brier score, ECE, temperature scaling
     tests/        checks that views don't leak hidden information
-    docs/         notes
+    docs/         notes; simulator.md explains the simulator and its tables
 
 Run everything from the repository root with `python -m ...`.
 
@@ -54,6 +54,15 @@ Check the data. This writes `validation_out/`, including `benchmark_plan_ids.txt
 Check that the views don't leak anything:
 
     python -m tests.test_views
+
+Write the views as tables to look at them (same plans, split and walks as the GNN; writes
+`sim_tables/` and a summary). Add `--limit 300` for a quick look:
+
+    python -m simulator.tables --source modres --root "D:\ModRes\dataset" --ids validation_out\benchmark_plan_ids.txt
+
+Compare the exploration policies and stop rules (writes `sim_compare/`):
+
+    python -m simulator.compare --root "D:\ModRes\dataset" --ids validation_outenchmark_plan_ids.txt
 
 Quick run without the dataset (synthetic plans, the numbers mean nothing):
 
@@ -82,11 +91,31 @@ calibration setting and flat size (number of bedrooms). For repeated runs change
 - Edge length is centre to centre for now, using the stored room position (the average
   of the polygon's corners).
 
+## How the simulator explores
+
+Short version below; the full description (words, MDP, rules, output files) is in `docs/simulator.md`.
+
+- The robot visits rooms nearest to the front door first, counting steps through doorways
+  and passages (never walls). Rooms the same number of steps away are visited in a random
+  order fixed by the seed.
+- Rooms visible through an open passage of a visited room count as seen. Rooms behind a
+  closed doorway of a visited or seen room are stubs, the rooms Task 1 predicts.
+- "25 % explored" means 25 % of the rooms (visited + seen), not floor area. The robot stops
+  the moment the share of known rooms is closest to that (a tie goes below). It can still be a bit
+  above (about 30 % on average at 25 %, because the front-door view alone is often a third of a
+  small flat). `stop="at_most"` never goes above, but small flats then get no 25 % view.
+- Each seed is one walk, and the 25 / 50 / 75 % views are snapshots of it, so they are nested.
+- The walk is written as a Markov decision process (`ExplorationEnv` in `simulator/explore.py`):
+  the state is what the robot knows, an action is the next room to enter, and a policy picks it.
+  Nearest-first (`bfs`) is the baseline and gives all our views. `random` and `door_first` are
+  there to test whether the models depend on how the robot explores
+  (`make_views(plan, policy="random")`). Nothing is learned yet; a learned policy would need a reward.
+
 ## Open questions
 
-- How the robot picks the next room, whether rooms behind an open passage count as
-  seen, and whether "25 % explored" means rooms or floor area.
-- Whether the models may know how much of the flat was explored (`--no-fraction-feature`).
+- Whether the models may know how much of the flat was explored. For now use
+  `--no-fraction-feature` for all real results: together with the number of visited rooms,
+  the fraction gives away the total number of rooms, which a real robot wouldn't know.
 - About 300 doors sit between rooms the graph calls "wall". That could mean wrong
   labels for the hidden-door task.
 
